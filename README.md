@@ -41,6 +41,8 @@ adjust the selection before clicking **Sync**.
 pip install -r requirements.txt
 python main.py
 ```
+<img width="1347" height="971" alt="image" src="https://github.com/user-attachments/assets/a8c611aa-3c2c-4817-9359-e9a00649dc24" />
+
 
 Both providers sign in the same way: clicking Connect opens **your real,
 default system browser** to the provider's own sign-in page — type your

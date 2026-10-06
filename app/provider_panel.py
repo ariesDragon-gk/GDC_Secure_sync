@@ -30,6 +30,7 @@ from .file_tree import FileTree, file_type_label, human_size
 from .folder_picker import RemoteFolderPickerDialog
 from .theme import ALERT_RED, TERMINAL_GREEN
 from .scanner import LocalFileMeta
+from .client_registry import ClientRegistry
 from .sync_history import record_sync
 from .tree_widget import MissingFilesTree
 from .workers import ScanCompareWorker, UploadWorker
@@ -467,13 +468,35 @@ class ProviderPanel(QWidget):
         self.scan_btn.setEnabled(False)
         self.cancel_btn.setEnabled(True)
 
-        self.upload_worker = UploadWorker(self.client, self.local_map, to_upload, remote_folder)
+        self.upload_worker = UploadWorker(
+            self.client, self.local_map, to_upload, remote_folder, registry=self.build_registry()
+        )
+        self.upload_worker.client_limit.connect(self.on_client_limit)
         self.upload_worker.log.connect(self.log_message.emit)
         self.upload_worker.log_colored.connect(self.log_message_colored.emit)
         self.upload_worker.overall_progress.connect(self.on_upload_progress)
         self.upload_worker.finished_ok.connect(self.on_upload_finished)
         self.upload_worker.auth_lost.connect(self.on_connection_lost)
         self.upload_worker.start()
+
+    def registry_app_id(self) -> str:
+        """The provider's app id (Dropbox app key / Azure client id). Subclasses override."""
+        return ""
+
+    def build_registry(self) -> Optional[ClientRegistry]:
+        app_id = self.registry_app_id()
+        settings = getattr(self, "settings", None)
+        if not (app_id and settings and self.client):
+            return None
+        return ClientRegistry(self.client, self.provider_label, app_id, settings.machine_client_id)
+
+    def on_client_limit(self, message: str) -> None:
+        self.cancel_btn.setEnabled(False)
+        self.scan_btn.setEnabled(True)
+        self.sync_btn.setEnabled(True)
+        self.progress_detail_label.setText("Sync blocked: client limit reached.")
+        self.log_message_colored.emit(f"✗ {self.provider_label} sync blocked: {message}", "red")
+        QMessageBox.warning(self, "Client limit reached", message)
 
     def _prompt_conflict_resolution(self, conflicts: List[FileDiff]) -> str:
         preview = "\n".join(f"  • {d.rel_path}  ({d.status.value})" for d in conflicts[:10])

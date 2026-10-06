@@ -84,3 +84,26 @@ class CloudClient(ABC):
         """Uploads local_path to remote_path, creating any missing parent folders.
         Returns the server-confirmed UploadResult so the caller can verify the
         upload actually landed correctly."""
+
+    @abstractmethod
+    def download_bytes(self, remote_path: str) -> Optional[bytes]:
+        """Returns the file's content, or None if nothing exists at remote_path.
+        Used for small control files (the connected-clients registry), not bulk data."""
+
+    def upload_bytes(self, data: bytes, remote_path: str) -> None:
+        """Uploads a small in-memory blob by staging it as a temp file and
+        reusing upload_file, so both providers get verified-size semantics
+        without a second upload code path."""
+        import os
+        import tempfile
+
+        fd, tmp = tempfile.mkstemp(suffix=".json")
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+            self.upload_file(Path(tmp), remote_path, datetime.utcnow())
+        finally:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass

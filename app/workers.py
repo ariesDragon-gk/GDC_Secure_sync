@@ -5,11 +5,12 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from PySide6.QtCore import QThread, Signal
 
 from .cloud_base import CloudAuthError, CloudClient, CloudSyncError
+from .client_registry import ClientLimitError, ClientRegistry
 from .comparator import FileDiff, compare
 from .scanner import LocalFileMeta, scan_local
 
@@ -75,6 +76,7 @@ class UploadWorker(QThread):
     overall_progress = Signal(int, int, float, float, float)
     finished_ok = Signal(int, int, list, bool)  # succeeded, failed, failed_details, cancelled
     auth_lost = Signal(str)  # connection/session died mid-upload
+    client_limit = Signal(str)  # this machine would be one client too many for the app id
 
     def __init__(
         self,
@@ -82,8 +84,10 @@ class UploadWorker(QThread):
         local_map: Dict[str, LocalFileMeta],
         diffs: List[FileDiff],
         remote_root: str,
+        registry: Optional[ClientRegistry] = None,
     ):
         super().__init__()
+        self._registry = registry
         self._client = client
         self._local_map = local_map
         self._diffs = diffs
@@ -94,6 +98,25 @@ class UploadWorker(QThread):
         self._cancelled = True
 
     def run(self):
+        if self._registry is not None:
+            try:
+                registry = self._registry.check_in()
+                self.log.emit(
+                    f"Client registered: {self._registry.machine['hostname']} "
+                    f"({len(registry['clients'])}/{self._registry.max_clients} clients on this app id)."
+                )
+            except ClientLimitError as exc:
+                self.client_limit.emit(str(exc))
+                return
+            except CloudAuthError as exc:
+                self.auth_lost.emit(str(exc))
+                return
+            except Exception as exc:
+                # Registry trouble must not stop a backup: the limit can't be
+                # verified right now, so say so and carry on.
+                self.log_colored.emit(f"⚠ Could not verify client registry ({exc}); continuing sync.", "red")
+                self._registry = None
+
         total = len(self._diffs)
         total_bytes = sum(
             self._local_map[d.rel_path].size for d in self._diffs if d.rel_path in self._local_map
@@ -195,5 +218,13 @@ class UploadWorker(QThread):
 
         if state["cancelled"]:
             self.log_colored.emit("✗ Upload cancelled by user.", "red")
+
+        if self._registry is not None:
+            try:
+                self._registry.record_sync(
+                    state["succeeded"], state["failed"], state["cancelled"], int(state["bytes_done"])
+                )
+            except Exception as exc:
+                self.log.emit(f"Could not record this sync in the client registry: {exc}")
 
         self.finished_ok.emit(state["succeeded"], state["failed"], failed_details, state["cancelled"])

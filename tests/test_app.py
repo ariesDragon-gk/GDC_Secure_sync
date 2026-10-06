@@ -1635,13 +1635,14 @@ def test_conflict_detection_and_resolution():
     class RecordingUploadWorker:
         instances = []
 
-        def __init__(self, client, local_map, diffs, remote_root):
+        def __init__(self, client, local_map, diffs, remote_root, registry=None):
             self.diffs = list(diffs)
             self.log = _FakeSignal()
             self.log_colored = _FakeSignal()
             self.overall_progress = _FakeSignal()
             self.finished_ok = _FakeSignal()
             self.auth_lost = _FakeSignal()
+            self.client_limit = _FakeSignal()
             RecordingUploadWorker.instances.append(self)
 
         def start(self):
@@ -2462,6 +2463,103 @@ def test_main_window_log_export_and_refresh():
         window.onedrive_panel.shutdown()
 
 
+def test_client_registry_limit_and_machine_details():
+    print("\n--- Client registry: machine details recorded, max 5 clients per app id enforced ---")
+    import json
+
+    from app import client_registry as cr
+    from app.cloud_base import CloudClient
+
+    class FakeCloud(CloudClient):
+        display_name = "Dropbox"
+
+        def __init__(self, store):
+            self.store = store  # shared dict == the one cloud account all machines see
+
+        def list_folder_recursive(self, remote_root, log=None):
+            return {}
+
+        def list_child_folders(self, remote_path):
+            return []
+
+        def upload_file(self, local_path, remote_path, client_modified, progress_cb=None):
+            self.store[remote_path] = Path(local_path).read_bytes()
+
+        def download_bytes(self, remote_path):
+            return self.store.get(remote_path)
+
+    cr.lookup_public_location = lambda timeout=4.0: {"public_ip": "203.0.113.9", "city": "Pune", "country": "India"}
+    store: dict = {}
+
+    def machine(n):
+        return cr.ClientRegistry(FakeCloud(store), "Dropbox", "APPKEY1", f"id{n}")
+
+    for n in range(5):
+        reg = machine(n).check_in()
+    check("five distinct machines register", len(reg["clients"]) == 5)
+
+    try:
+        machine(5).check_in()
+        blocked = False
+    except cr.ClientLimitError:
+        blocked = True
+    check("a sixth machine is blocked", blocked)
+
+    saved = json.loads(store[cr.registry_path("Dropbox", "APPKEY1")].decode())
+    check("blocked machine was not written to the registry", "id5" not in saved["clients"])
+
+    again = machine(2)
+    check("an already-registered machine is never blocked", len(again.check_in()["clients"]) == 5)
+
+    again.record_sync(succeeded=3, failed=1, cancelled=False, total_bytes=999)
+    saved = json.loads(store[cr.registry_path("Dropbox", "APPKEY1")].decode())
+    entry = saved["clients"]["id2"]
+    check("machine details recorded (hostname, os, ip, location)",
+          entry["hostname"] and entry["os"] and entry["public_ip"] == "203.0.113.9" and entry["city"] == "Pune")
+    check("sync time and count recorded", entry["last_sync"] and entry["sync_count"] == 1)
+    check("sync event logged with outcome", saved["events"][-1]["succeeded"] == 3 and saved["events"][-1]["client_id"] == "id2")
+
+    other_app = cr.ClientRegistry(FakeCloud(store), "Dropbox", "APPKEY2", "id5")
+    check("a different app id has its own independent limit", len(other_app.check_in()["clients"]) == 1)
+
+    machine(0).remove_client("id1")
+    check("removing a machine frees its slot for a new one", len(machine(5).check_in()["clients"]) == 5)
+
+    check("corrupt registry file degrades to empty", cr.parse_registry(b"{nope", "Dropbox", "A")["clients"] == {})
+
+
+def test_upload_worker_blocks_when_client_limit_reached():
+    print("\n--- UploadWorker refuses to upload when the client limit is hit ---")
+    from PySide6.QtTest import QTest
+
+    from app.client_registry import ClientLimitError
+    from app.workers import UploadWorker
+
+    class FullRegistry:
+        max_clients = 5
+        machine = {"hostname": "x"}
+
+        def check_in(self):
+            raise ClientLimitError("limit")
+
+    class NoUploadClient:
+        display_name = "Dropbox"
+
+        def upload_file(self, *a, **k):
+            raise AssertionError("must not upload when blocked")
+
+    msgs = []
+    w = UploadWorker(NoUploadClient(), {}, [], "/", registry=FullRegistry())
+    w.client_limit.connect(msgs.append)
+    done = []
+    w.finished_ok.connect(lambda *a: done.append(a))
+    w.start()
+    w.wait(5000)
+    QTest.qWait(100)
+    check("client_limit signal emitted", msgs == ["limit"])
+    check("no sync-complete emitted when blocked", done == [])
+
+
 def test_connection_loss_handling():
     print("\n--- Connection loss mid-scan and mid-upload surfaces a clear alert ---")
     from PySide6.QtTest import QTest
@@ -2640,6 +2738,8 @@ def main():
         test_hacker_log_flush_now()
         test_main_window_log_export_and_refresh()
         test_connection_loss_handling()
+        test_client_registry_limit_and_machine_details()
+        test_upload_worker_blocks_when_client_limit_reached()
     finally:
         _cleanup_test_isolation()
 

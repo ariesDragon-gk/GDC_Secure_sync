@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Dict, Optional
@@ -58,18 +59,29 @@ class AppSettings:
     onedrive_local_folder: str = ""
     onedrive_remote_folder: str = "/"
 
+    # Stable per-machine identity used by the connected-clients registry.
+    # Generated on first launch and never shared between machines.
+    machine_client_id: str = ""
+
     secrets_fallback: Dict[str, str] = field(default_factory=dict)
 
 
 def load_settings() -> AppSettings:
     path = _config_path()
-    if not path.exists():
-        return AppSettings()
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return AppSettings(**{**asdict(AppSettings()), **data})
-    except Exception:
-        return AppSettings()
+    settings = AppSettings()
+    if path.exists():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            settings = AppSettings(**{**asdict(AppSettings()), **data})
+        except Exception:
+            settings = AppSettings()
+    if not settings.machine_client_id:
+        settings.machine_client_id = uuid.uuid4().hex
+        try:
+            save_settings(settings)
+        except OSError:
+            pass  # still usable this run; a new id is just generated next launch
+    return settings
 
 
 def save_settings(settings: AppSettings) -> None:

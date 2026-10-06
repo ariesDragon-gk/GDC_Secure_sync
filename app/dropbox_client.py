@@ -323,6 +323,20 @@ class DropboxClient(CloudClient):
             )
         return UploadResult(remote_id=meta.id, remote_size=meta.size)
 
+    def download_bytes(self, remote_path: str) -> Optional[bytes]:
+        try:
+            _meta, resp = self._retrying(lambda: self._dbx.files_download(remote_path))
+            return resp.content
+        except AuthError as exc:
+            _raise_from_auth_error(exc)
+        except ApiError as exc:
+            err = getattr(exc, "error", None)
+            if err is not None and hasattr(err, "is_path") and err.is_path() and err.get_path().is_not_found():
+                return None
+            raise DropboxSyncError(f"Failed to download '{remote_path}': {exc}") from exc
+        except requests.RequestException as exc:
+            raise DropboxSyncError(f"Network error downloading '{remote_path}': {exc}") from exc
+
     @staticmethod
     def _retrying(call: Callable, attempts: int = 3):
         last_exc = None

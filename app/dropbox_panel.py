@@ -50,6 +50,9 @@ class DropboxPanel(ProviderPanel):
         setup_help_btn.clicked.connect(self.on_setup_help_clicked)
         return [QLabel("App key:"), self.app_key_edit, self.connect_btn, self.disconnect_btn, setup_help_btn]
 
+    def registry_app_id(self) -> str:
+        return self.app_key_edit.text().strip()
+
     def on_disconnect_clicked(self) -> None:
         config.clear_secret(config.DROPBOX_TOKEN_KEY, self.settings)
         config.save_settings(self.settings)

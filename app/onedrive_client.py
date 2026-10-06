@@ -394,6 +394,19 @@ class OneDriveClient(CloudClient):
         except requests.RequestException as exc:
             raise OneDriveSyncError(f"Network error uploading '{local_path.name}': {exc}") from exc
 
+    def download_bytes(self, remote_path: str) -> Optional[bytes]:
+        try:
+            resp = self._session.get(_item_url(remote_path, "/content"), timeout=60)
+        except requests.RequestException as exc:
+            raise OneDriveSyncError(f"Network error downloading '{remote_path}': {exc}") from exc
+        if resp.status_code == 404:
+            return None
+        if resp.status_code == 401:
+            raise OneDriveAuthError("OneDrive session expired; please reconnect.")
+        if not resp.ok:
+            raise OneDriveSyncError(f"Download failed for '{remote_path}': {resp.status_code} {resp.text}")
+        return resp.content
+
     def _get_item(self, remote_path: str) -> Optional[dict]:
         url = f"{GRAPH_ROOT}/me/drive/root:{_quote_path(remote_path)}"
         try:

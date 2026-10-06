@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .clients_dialog import ClientsDialog
 from .config import load_settings
 from .dropbox_panel import DropboxPanel
 from .hacker_log import HackerLogWidget
@@ -67,6 +68,12 @@ class MainWindow(QMainWindow):
         self.history_btn.setToolTip("How many syncs happened, per date, with speed and duration")
         self.history_btn.clicked.connect(self.on_history_clicked)
         log_header.addWidget(self.history_btn)
+        self.clients_btn = QPushButton("🌍 Clients")
+        self.clients_btn.setToolTip(
+            "Every machine that syncs with the same app id: details, location, last sync time (max 5 per app id)"
+        )
+        self.clients_btn.clicked.connect(self.on_clients_clicked)
+        log_header.addWidget(self.clients_btn)
         layout.addLayout(log_header)
 
         self.log_view = HackerLogWidget()
@@ -84,6 +91,12 @@ class MainWindow(QMainWindow):
     def on_history_clicked(self) -> None:
         dialog = SyncHistoryDialog(self)
         dialog.exec()
+
+    def on_clients_clicked(self) -> None:
+        registries = [
+            r for r in (self.dropbox_panel.build_registry(), self.onedrive_panel.build_registry()) if r
+        ]
+        ClientsDialog(registries, self).exec()
 
     def on_export_log_clicked(self) -> None:
         default_name = f"sync_log_{time.strftime('%Y%m%d_%H%M%S')}.txt"
